@@ -152,33 +152,67 @@ class Feed extends Component {
   finishEditHandler = postData => {
     this.setState({
       editLoading: true
-    });
-    const formData = new FormData();
-    formData.append('title', postData.title);
-    formData.append('content', postData.content);
-    formData.append('image', postData.image);
+    })
 
-    let graphqlQuery = {
-      query: `
-        mutation {
-          createPost(postInput: {title: "${postData.title}", content: "${postData.content}", imageUrl: "some url"}) {
-            _id
-            title
-            content
-            imageUrl
-            creator {
-              name
+    const formData = new FormData();
+    formData.append('image', postData.image);
+    if (this.state.editPost) {
+      formData.append('oldPath', this.state.editPost.imagePath);
+    }
+    fetch('http://localhost:8001/post-image', {
+      method: 'PUT',
+      headers: {
+        Authorization: 'Bearer ' + this.props.token
+      },
+      body: formData
+    })
+    .then(res => res.json())
+      .then(fileResData => {
+        const imageUrl = fileResData.filePath;
+        let graphqlQuery = {
+          query: `
+          mutation {
+            createPost(postInput: {title: "${postData.title}", content: "${
+            postData.content
+          }", imageUrl: "${imageUrl}"}) {
+              _id
+              title
+              content
+              imageUrl
+              creator {
+                name
+              }
+              createdAt
             }
-            createdAt
           }
+        `
+        };
+
+        if (this.state.editPost) {
+          graphqlQuery = {
+            query: `
+              mutation {
+                updatePost(id: "${this.state.editPost._id}", postInput: {title: "${postData.title}", content: "${
+                postData.content
+              }", imageUrl: "${imageUrl}"}) {
+                  _id
+                  title
+                  content
+                  imageUrl
+                  creator {
+                    name
+                  }
+                  createdAt
+                }
+              }
+            `
+          };
         }
-      `
-    };
 
     let url = 'http://localhost:8001/graphql';
     let method = 'POST';
 
-    fetch(url, {
+   return fetch(url, {
       method: method,
       body: JSON.stringify(graphqlQuery),
       headers: {
@@ -186,6 +220,7 @@ class Feed extends Component {
         'Content-Type': 'application/json'
       }
     })
+  })
       .then(res => {
         
         return res.json();
@@ -200,9 +235,31 @@ class Feed extends Component {
         if (resData.errors) {
           throw new Error('User login failed!');
         }
-        
+        let resDataField = 'createPost';
+        if (this.state.editPost) {
+          resDataField = 'updatePost';
+        }
+        const post = {
+          _id: resData.data[resDataField]._id,
+          title: resData.data[resDataField].title,
+          content: resData.data[resDataField].content,
+          creator: resData.data[resDataField].creator,
+          createdAt: resData.data[resDataField].createdAt,
+          imagePath: resData.data[resDataField].imageUrl
+        };
         this.setState(prevState => {
+          let updatedPosts = [...prevState.posts];
+          if (prevState.editPost) {
+            const postIndex = prevState.posts.findIndex(
+              p => p._id === prevState.editPost._id
+            );
+            updatedPosts[postIndex] = post;
+          } else {
+            updatedPosts.pop();
+            updatedPosts.unshift(post);
+          }
           return {
+            posts: updatedPosts,
             isEditing: false,
             editPost: null,
             editLoading: false
@@ -226,21 +283,30 @@ class Feed extends Component {
 
   deletePostHandler = postId => {
     this.setState({ postsLoading: true });
-    fetch('http://localhost:8001/feed/post/' + postId,{
-      method:"DELETE",
+    const graphqlQuery = {
+      query: `
+        mutation {
+          deletePost(id: "${postId}")
+        }
+      `
+    };
+    fetch('http://localhost:8001/graphql', {
+      method: 'POST',
       headers: {
-        Authorization: 'Bearer ' + this.props.token
-      }
+        Authorization: 'Bearer ' + this.props.token,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(graphqlQuery)
     })
       .then(res => {
-        if (res.status !== 200 && res.status !== 201) {
-          throw new Error('Deleting a post failed!');
-        }
         return res.json();
       })
       .then(resData => {
+        if (resData.errors) {
+          throw new Error('Deleting the post failed!');
+        }
         console.log(resData);
-        this.loadPosts()
+        this.loadPosts();
         // this.setState(prevState => {
         //   const updatedPosts = prevState.posts.filter(p => p._id !== postId);
         //   return { posts: updatedPosts, postsLoading: false };
@@ -259,6 +325,7 @@ class Feed extends Component {
   catchError = error => {
     this.setState({ error: error });
   };
+
 
   render() {
     return (
